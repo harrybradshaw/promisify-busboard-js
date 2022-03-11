@@ -1,6 +1,6 @@
 import { createInterface } from 'readline';
 import { URL } from 'url';
-import request from 'request';
+import fetch from 'node-fetch';
 
 const readline = createInterface({
     input: process.stdin,
@@ -12,11 +12,13 @@ const TFL_BASE_URL = 'https://api.tfl.gov.uk';
 
 export default class ConsoleRunner {
 
-    promptForPostcode(callback) {
-        readline.question('\nEnter your postcode: ', function(postcode) {
-            readline.close();
-            callback(postcode);
-        });
+    async promptForPostcode() {
+        return new Promise(((resolve, reject) => {
+            readline.question('\nEnter your postcode: ', (answer => {
+                readline.close();
+                return resolve(answer);
+            }))
+        }))
     }
 
     displayStopPoints(stopPoints) {
@@ -31,31 +33,27 @@ export default class ConsoleRunner {
         return requestUrl.href;
     }
 
-    makeGetRequest(baseUrl, endpoint, parameters, callback) {
+    async makeGetRequest(baseUrl, endpoint, parameters) {
         const url = this.buildUrl(baseUrl, endpoint, parameters);
-
-        request.get(url, (err, response, body) => {
-            if (err) {
-                console.log(err);
-            } else if (response.statusCode !== 200) {
-                console.log(response.statusCode);
-            } else {
-                callback(body);
-            }
-        });
+        let response;
+        try {
+            response = await fetch(url, {method: 'GET'});
+            return await response.json();
+        }
+        catch (err) {
+            console.log(err);
+        }
     }
 
-    getLocationForPostCode(postcode, callback) {
-        this.makeGetRequest(POSTCODES_BASE_URL, `postcodes/${postcode}`, [], function(responseBody) {
-            const jsonBody = JSON.parse(responseBody);
-            callback({ latitude: jsonBody.result.latitude, longitude: jsonBody.result.longitude });
-        });
+    async getLocationForPostCode(postcode) {
+        const jsonBody = await this.makeGetRequest(POSTCODES_BASE_URL, `postcodes/${postcode}`, [])
+        return {latitude: jsonBody.result.latitude, longitude: jsonBody.result.longitude}
     }
 
-    getNearestStopPoints(latitude, longitude, count, callback) {
-        this.makeGetRequest(
+    async getNearestStopPoints(latitude, longitude, count) {
+        const jsonBody = await this.makeGetRequest(
             TFL_BASE_URL,
-            `StopPoint`, 
+            `StopPoint`,
             [
                 {name: 'stopTypes', value: 'NaptanPublicBusCoachTram'},
                 {name: 'lat', value: latitude},
@@ -63,25 +61,17 @@ export default class ConsoleRunner {
                 {name: 'radius', value: 1000},
                 {name: 'app_id', value: '' /* Enter your app id here */},
                 {name: 'app_key', value: '' /* Enter your app key here */}
-            ],
-            function(responseBody) {
-                const stopPoints = JSON.parse(responseBody).stopPoints.map(function(entity) { 
-                    return { naptanId: entity.naptanId, commonName: entity.commonName };
-                }).slice(0, count);
-                callback(stopPoints);
-            }
-        );
+            ]);
+        return jsonBody.stopPoints.map(function(entity) {
+            return { naptanId: entity.naptanId, commonName: entity.commonName };
+        }).slice(0, count);
     }
 
-    run() {
+    async run() {
         const that = this;
-        that.promptForPostcode(function(postcode) {
-            postcode = postcode.replace(/\s/g, '');
-            that.getLocationForPostCode(postcode, function(location) {
-                that.getNearestStopPoints(location.latitude, location.longitude, 5, function(stopPoints) {
-                    that.displayStopPoints(stopPoints);
-                });
-            });
-        });
+        const postcode = await that.promptForPostcode();
+        const location = await that.getLocationForPostCode(postcode);
+        const stopPoints = await that.getNearestStopPoints(location.latitude, location.longitude, 5);
+        this.displayStopPoints(stopPoints);
     }
 }
